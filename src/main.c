@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "version.h"
+
 #include "scanivalve/mps-protocol.h"
 
 #define MAX_TRACKED_FRAME_GAPS 1024
@@ -23,11 +25,6 @@ typedef struct {
     u8* data;
     u64 size;
 } ByteArray;
-
-typedef struct {
-    u8 type;
-    u8 size;
-} Packet;
 
 typedef struct {
     char filepath[64];
@@ -62,17 +59,25 @@ void print_summary(FILE* f, Summary* sum);
 
 int main(int argc, char** argv)
 {
+    if ( (argc > 1 ) && ( strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0) )
+    {
+        fprintf(stdout, "v%s", MPS_INFO_VERSION_STRING);
+        return 0;
+    }
     if (argc < 2)
     {
         fprintf(stderr, "Not enough arguments, filepath required\n");
         return 1;
     }
+
+
     Summary summary =  {0};
 
     const char* fname = argv[1];
     snprintf(summary.filepath, sizeof(summary.filepath),"%s", fname);
 
     ByteArray bytes = read_file(fname);
+    if (!bytes.data) return 1;
 
     //- determine the packet type (assume constant for whole file)
     u8 packet_type = bytes.data[0];
@@ -100,7 +105,11 @@ int main(int argc, char** argv)
 ByteArray read_file(const char* fname)
 {
     FILE* f = fopen(fname, "rb");
-    if (!f) return (ByteArray){0};
+    if (!f)
+    {
+        fprintf(stderr, "could not open %s", fname);
+        return (ByteArray){0};
+    }
 
     fseek(f, 0, SEEK_END);
     u64 size = (u64)ftell(f);
