@@ -6,6 +6,7 @@
 #include "version.h"
 
 #include "scanivalve/mps-protocol.h"
+#include "scanivalve/mps-protocol-version.h"
 
 #define MAX_TRACKED_FRAME_GAPS 1024
 
@@ -61,7 +62,8 @@ int main(int argc, char** argv)
 {
     if ( (argc > 1 ) && ( strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0) )
     {
-        fprintf(stdout, "v%s", MPS_INFO_VERSION_STRING);
+        fprintf(stdout, "v%s\n", MPS_INFO_VERSION_STRING);
+        fprintf(stdout, "  - Scanivalve Protocol Version v%s\n  - Scanivalve Firmware Version v%s\n", MPS_PROTOCOL_VERSION_STRING, MPS_FIRMWARE_VERSION_STRING );
         return 0;
     }
     if (argc < 2)
