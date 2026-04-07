@@ -50,16 +50,14 @@ target_include_directories(mps-info PRIVATE
 # Generate and attach Windows Version resource
 if (WIN32)
     configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.rc.in
-        ${MPS_INFO_GENERATED_DIR}/version.rc
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/resources.rc.in
+        ${MPS_INFO_GENERATED_DIR}/resources.rc
         @ONLY
     )
 
     target_sources(mps-info PRIVATE
-        ${MPS_INFO_GENERATED_DIR}/version.rc
+        ${MPS_INFO_GENERATED_DIR}/resources.rc
     )
-
-
 endif()
         
 
