@@ -1,13 +1,23 @@
 cmake_minimum_required(VERSION 3.25)
 
+# Project configuration ---
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" PROJECT_VERSION_STRING)
 string(STRIP "${PROJECT_VERSION_STRING}" PROJECT_VERSION_STRING)
 
-# Project configuration
 project(mps-info
     VERSION ${PROJECT_VERSION_STRING}
     LANGUAGES C RC
 )
+
+# Dependencies ---
+include(FetchContent)
+
+FetchContent_Declare(
+    scanivalve-mps-protocol
+    GIT_REPOSITORY https://github.com/csooriyakumaran/scanivalve-mps-protocol.git
+    GIT_TAG 49ce41d
+)
+FetchContent_MakeAvailable(scanivalve-mps-protocol)
 
 # Use clang as the C compiler
 if (NOT CMAKE_C_COMPILER)
@@ -25,8 +35,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_definitions(
     _CRT_SECURE_NO_WARNINGS
 )
-# Add external scanivalve-mps-protocol interface library
-add_subdirectory(external/scanivalve-mps-protocol)
 
 # Generated files directory
 set(MPS_INFO_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
