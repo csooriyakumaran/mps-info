@@ -23,7 +23,7 @@ include(FetchContent)
 FetchContent_Declare(
     scanivalve-mps-protocol
     GIT_REPOSITORY https://github.com/csooriyakumaran/scanivalve-mps-protocol.git
-    GIT_TAG v0.1.1
+    GIT_TAG v0.1.4
 )
 FetchContent_MakeAvailable(scanivalve-mps-protocol)
 
