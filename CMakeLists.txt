@@ -75,9 +75,19 @@ if (WIN32)
         ${MPS_INFO_GENERATED_DIR}/resources.rc
     )
 endif()
-        
+
 
 # Link against scanivalve-mps-protocol so its include directories are visible to this target
 target_link_libraries(mps-info PRIVATE scanivalve-mps-protocol)
 
-install(TARGETS mps-info RUNTIME DESTINATION .)
+install(TARGETS mps-info
+    RUNTIME DESTINATION bin
+    COMPONENT Runtime
+)
+
+install(FILES README.md LICENSE
+    DESTINATION .
+    COMPONENT Docs
+)
+
+

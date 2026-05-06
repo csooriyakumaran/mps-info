@@ -1,9 +1,19 @@
-#MPS-INFO
+# MPS-INFO
 
-Prints scan information from an MPS output binary file
+Prints scan information from an MPS output binary file to the console. 
+
+Uses the [Scanivalve-MPS-Protocol](https://github.com/csooriyakumaran/scanivalve-mps-protocol), as defined in the [Scanivavle Hardware, Software, and User Manual](https://scanivalve.com/wp-content/uploads/2026/03/MPS4200_v401_260304.pdf).
 
 
-## Example Output
+
+# USAGE
+
+```powershell
+mps-info.exe <path/to/datafile>
+
+```
+
+***OUTPUT***
 
 ```text
 -----------------------------------------------------------
@@ -25,4 +35,18 @@ Prints scan information from an MPS output binary file
  -- Missing Frames                                        0
  -- Repeated Frames                                       0
 -----------------------------------------------------------
+```
+
+# BUILD FROM SOURCE
+
+```powershelll
+cmake -S . -B build -G "Ninja" -D CMAKE_C_COMPIlER=clang -D CMAKE_BUILD_TYPE=Release
+cmake --build build
+
+# install with docs
+cmake --install build --config Release --prefix <path/to/install>
+
+# install executable only to <prefix>/bin/mps-info.exe
+cmake --install build --config Release --prefix <path/to/install> --component Runtime
+
 ```
