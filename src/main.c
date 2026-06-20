@@ -8,7 +8,7 @@
 #include "scanivalve/mps-protocol.h"
 #include "scanivalve/mps-protocol-version.h"
 
-#define AETHER_IMPLEMENTATOIN
+#define AETHER_IMPLEMENTATION
 #include "aether/aether.h"
 
 #define MAX_TRACKED_FRAME_GAPS 1024
@@ -53,7 +53,7 @@ typedef struct {
 
 
 
-ByteArray read_file(const char* fname);
+ByteArray read_file(Arena* arena, const char* fname);
 void destroy_bytes(ByteArray* bytes);
 void dump_bytes(FILE* f, ByteArray* bytes);
 
@@ -76,13 +76,14 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    Arena permament = arena_alloc(GB(1));
 
     Summary summary =  {0};
 
     const char* fname = argv[1];
     snprintf(summary.filepath, sizeof(summary.filepath),"%s", fname);
 
-    ByteArray bytes = read_file(fname);
+    ByteArray bytes = read_file(&permament, fname);
     if (!bytes.data) return 1;
 
     //- determine the packet type (assume constant for whole file)
@@ -91,24 +92,27 @@ int main(int argc, char** argv)
     if (!info)
     {
         fprintf(stderr, "Error: Unknown Packet Type `0x%02x`", packet_type);
-        destroy_bytes(&bytes);
+        arena_clear(&permament);
+        // destroy_bytes(&bytes);
         return 1;
     }
 
     if (!summarize(&bytes, &summary))
     {
         fprintf(stderr, "Failed to summarize file contents.\n");
-        destroy_bytes(&bytes);
+        arena_clear(&permament);
+        // destroy_bytes(&bytes);
         return 1;
     }
 
     print_summary(stdout, &summary);
-    destroy_bytes(&bytes);
+    arena_clear(&permament);
+    // destroy_bytes(&bytes);
 
     return 0;
 }
 
-ByteArray read_file(const char* fname)
+ByteArray read_file(Arena* arena, const char* fname)
 {
     FILE* f = fopen(fname, "rb");
     if (!f)
@@ -122,7 +126,7 @@ ByteArray read_file(const char* fname)
     fseek(f, 0, SEEK_SET);
 
     ByteArray out = {
-        .data = (u8*)malloc(size),
+        .data = (u8*)arena_push_array(arena, u8, size),
         .size = size
     };
 
