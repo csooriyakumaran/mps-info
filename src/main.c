@@ -11,80 +11,82 @@
 #define AETHER_IMPLEMENTATION
 #include "aether/aether.h"
 
-#define MAX_TRACKED_FRAME_GAPS 1024
-
-// typedef int8_t   i8;
-// typedef int16_t  i16;
-// typedef int32_t  i32;
-// typedef int64_t  i64;
-// typedef uint8_t  u8;
-// typedef uint16_t u16;
-// typedef uint32_t u32;
-// typedef uint64_t u64;
-// typedef float    f32;
-// typedef double   f64;
-
+#define MAX_TRACKED_FRAME_GAPS 256
 
 typedef struct {
-    u8* data;
-    u64 size;
-} ByteArray;
-
-typedef struct {
-    char filepath[64];
-    u32  device_type;
+    char* filepath;
     u64  file_size;
-    u8   packet_type;
+
+    u64  captured_frame_count;
+    u64  missing_frame_count;
+    u64  repeated_frame_count;
+
+    u32  device_type;
     u16  packet_size;
+    u8   packet_type;
     u8   units_index;
     u8   temperature_channel_count;
     u8   pressure_channel_count;
-    char start_time[32];
+
     f32  duration;
     f32  rate;
-    u64  count;
-    u64  missing;
-    u64  repeated;
-    u32  missing_frames[MAX_TRACKED_FRAME_GAPS];
+
+    u32* missing_frames;
     u32  missing_frames_len;
-    u32  repeate_frames[MAX_TRACKED_FRAME_GAPS];
-    u32  repeate_frames_len;
+    u32* repeat_frames;
+    u32  repeat_frames_len;
+    char start_time[32];
 } Summary;
 
-
-
-ByteArray read_file(Arena* arena, const char* fname);
-void destroy_bytes(ByteArray* bytes);
-void dump_bytes(FILE* f, ByteArray* bytes);
-
-int summarize(ByteArray* bytes, Summary* sum);
-void print_summary(FILE* f, Summary* sum);
-
+int evaluate_packets(str8 bytes, Summary* sum, Arena* arena);
+void print_summary(FILE* f, const Summary* sum);
 
 int main(int argc, char** argv)
 {
-    if ( (argc > 1 ) && ( strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0) )
-    {
-        fprintf(stdout, "v%s\n", MPS_INFO_VERSION_STRING);
-        fprintf(stdout, "  - Scanivalve Protocol Version v%s\n  - Scanivalve Firmware Version v%s\n", MPS_PROTOCOL_VERSION_STRING, MPS_FIRMWARE_VERSION_STRING );
-        fprintf(stdout, "  -              Aether Verison v%s\n", AETHER_VERSION_STRING);
-        return 0;
-    }
+    const char* fname = NULL;
+    b8 mapfile        = false;
+
     if (argc < 2)
     {
         fprintf(stderr, "Not enough arguments, filepath required\n");
         return 1;
     }
 
-    Arena permament = arena_alloc(GB(1));
+    for (int i = 1; i < argc; ++i)
+    {
+        if (strcmp(argv[i], "--version") == 0|| strcmp(argv[i], "-v") == 0 )
+        {
+            fprintf(stdout, "v%s\n", MPS_INFO_VERSION_STRING);
+            fprintf(stdout, "  - Scanivalve Protocol Version v%s\n  - Scanivalve Firmware Version v%s\n", MPS_PROTOCOL_VERSION_STRING, MPS_FIRMWARE_VERSION_STRING );
+            fprintf(stdout, "  -              Aether Verison v%s\n", AETHER_VERSION_STRING);
+            return 0;
+        } else if (strcmp(argv[i], "--map-file") == 0) {
+            mapfile = true;
+        } else if (!fname) {
+            fname = argv[i];
+        }
+    }
 
-    Summary summary =  {0};
+    Arena   arena   = arena_alloc(GB(2));
+    Summary summary = {0};
+    summary.filepath = arena_push_cstring(&arena, fname);
 
-    const char* fname = argv[1];
-    snprintf(summary.filepath, sizeof(summary.filepath),"%s", fname);
+    str8 bytes = {0};
+    u64 start = time_mark();
 
-    ByteArray bytes = read_file(&permament, fname);
-    if (!bytes.data) return 1;
+    if (mapfile)
+        bytes = map_file(summary.filepath);
+    else
+        bytes = arena_read_file(&arena, summary.filepath);
+
+    if (!bytes.data || bytes.size == 0)
+    {
+        fprintf(stderr, "Error: No data read or mapped from %s", summary.filepath);
+        arena_release(&arena);
+        return 1;
+    }
+
+    u64 file_read_end = time_mark();
 
     //- determine the packet type (assume constant for whole file)
     u8 packet_type = bytes.data[0];
@@ -92,93 +94,39 @@ int main(int argc, char** argv)
     if (!info)
     {
         fprintf(stderr, "Error: Unknown Packet Type `0x%02x`", packet_type);
-        arena_clear(&permament);
-        // destroy_bytes(&bytes);
+        arena_release(&arena);
         return 1;
     }
 
-    if (!summarize(&bytes, &summary))
+    if (!evaluate_packets(bytes, &summary, &arena))
     {
         fprintf(stderr, "Failed to summarize file contents.\n");
-        arena_clear(&permament);
-        // destroy_bytes(&bytes);
+        arena_release(&arena);
         return 1;
     }
 
+    u64 end = time_mark();
     print_summary(stdout, &summary);
-    arena_clear(&permament);
-    // destroy_bytes(&bytes);
 
+    f64 file_read_time  = time_elapsed_sec(start, file_read_end) * 1000.0;
+    f64 processing_time = time_elapsed_sec(file_read_end, end) * 1000.0;
+    f64 elapsed_time    = time_elapsed_sec(start, end) * 1000.0;
+    fprintf(stdout, " -- File %-6s       %34.2f ms\n", mapfile ? "Mapped" : "Read", file_read_time);
+    fprintf(stdout, " -- Data Processed  %36.2f ms\n", processing_time);
+    fprintf(stdout, "-----------------------------------------------------------\n");
+    fprintf(stdout, " -- Total Time      %36.2f ms\n", elapsed_time);
+
+    if (mapfile) unmap_file(bytes);
+    arena_release(&arena);
     return 0;
 }
 
-ByteArray read_file(Arena* arena, const char* fname)
+int evaluate_packets(str8 bytes, Summary* sum, Arena* arena)
 {
-    FILE* f = fopen(fname, "rb");
-    if (!f)
-    {
-        fprintf(stderr, "could not open %s", fname);
-        return (ByteArray){0};
-    }
-
-    fseek(f, 0, SEEK_END);
-    u64 size = (u64)ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    ByteArray out = {
-        .data = (u8*)arena_push_array(arena, u8, size),
-        .size = size
-    };
-
-    if (!out.data)
-    {
-        fclose(f);
-        return (ByteArray){0};
-    }
-
-    size_t n = fread(out.data, 1, (size_t)out.size, f);
-    if (n != out.size)
-    {
-        fprintf(stderr, "Short read: expected %llu bytes, got %zu bytes\n", out.size, n);
-    }
-
-    fclose(f);
-
-    return out;
-}
-
-void destroy_bytes(ByteArray* bytes)
-{
-    if (!bytes) return;
-    if (bytes->data == NULL)
-    {
-        bytes->size = 0;
-        return;
-    }
-
-    free(bytes->data);
-    bytes->data = NULL;
-    bytes->size = 0;
-}
-
-void dump_bytes(FILE* f, ByteArray* bytes)
-{
-    for (u64 i = 0; i < bytes->size; ++i)
-    {
-        fprintf(f, "%02X", bytes->data[i]);
-        if ((i+1) % 4 == 0) fprintf(f, "  ");
-        else fprintf(f, " ");
-
-        if ((i+1) % 16 == 0) fprintf(f, "\n");
-    }
-}
-
-int summarize(ByteArray* bytes, Summary* sum)
-{
-    if (!bytes || !sum || !bytes->data)
+    if (!sum || !bytes.data)
         return 0;
 
-    if (bytes->size < sizeof(i32))
+    if (bytes.size < sizeof(i32))
     {
         fprintf(stderr, "File too small to contain packet header\n");
         return 0;
@@ -189,7 +137,7 @@ int summarize(ByteArray* bytes, Summary* sum)
      * from mps-protocol.h. The first 4 bytes are an int32_t type field, and
      * the low byte holds the packet type ID (e.g. 0x0A, 0x5D, 0x5B, ...).
      */
-    u8 type_id = bytes->data[0];
+    u8 type_id = bytes.data[0];
 
     const MpsBinaryPacketInfo* info = mps_get_binary_packet_info_by_type(type_id);
     if (!info)
@@ -198,25 +146,28 @@ int summarize(ByteArray* bytes, Summary* sum)
         return 0;
     }
 
-    sum->file_size   = bytes->size;
-    sum->packet_type = type_id;
-    sum->packet_size = info->size_bytes;
-    sum->count       = 0;
-    sum->missing     = 0;
-    sum->duration    = 0.0f;
-    sum->rate        = 0.0f;
-    sum->units_index = 0;
-    sum->device_type = 0; /* unknown here; caller can fill if known */
-    sum->temperature_channel_count = info->temperature_channel_count;
-    sum->pressure_channel_count = info->pressure_channel_count;
-    sum->start_time[0] = '\0';
+    if (bytes.size % info->size_bytes != 0)
+        fprintf(stderr, "Warning: file size (%llu) is not a multiple of packet size (%u)\n", bytes.size, info->size_bytes);
 
-    if (bytes->size % info->size_bytes != 0)
-        fprintf(stderr, "Warning: file size (%llu) is not a multiple of packet size (%u)\n", bytes->size, info->size_bytes);
-
-    u64 packet_count = bytes->size / info->size_bytes;
+    u64 packet_count = bytes.size / info->size_bytes;
 
     if (packet_count == 0) return 1; /* nothing to do, but summary is valid */
+
+    sum->file_size            = bytes.size;
+    sum->packet_type          = type_id;
+    sum->packet_size          = info->size_bytes;
+    sum->captured_frame_count = 0;
+    sum->missing_frame_count  = 0;
+    sum->repeated_frame_count = 0;
+    sum->duration             = 0.0f;
+    sum->rate                 = 0.0f;
+    sum->units_index          = 0;
+    sum->device_type          = 0; /* unknown here; caller can fill if known */
+    sum->temperature_channel_count = info->temperature_channel_count;
+    sum->pressure_channel_count    = info->pressure_channel_count;
+    sum->start_time[0]  = '\0';
+    sum->missing_frames = arena_push_array(arena, u32, MAX_TRACKED_FRAME_GAPS);
+    sum->repeat_frames  = arena_push_array(arena, u32, MAX_TRACKED_FRAME_GAPS);
 
     u32 frame          = 0;
     u32 first_frame    = 0;
@@ -231,7 +182,7 @@ int summarize(ByteArray* bytes, Summary* sum)
 
     for (u64 i = 0; i < packet_count; ++i)
     {
-        const u8* base = bytes->data + i * info->size_bytes;
+        const u8* base = bytes.data + i * info->size_bytes;
 
         switch (info->type)
         {
@@ -304,23 +255,23 @@ int summarize(ByteArray* bytes, Summary* sum)
             {
                 for (u32 m = last_frame + 1; m < frame; ++m)
                 {
-                    sum->missing++;
+                    sum->missing_frame_count++;
                     if (sum->missing_frames_len < MAX_TRACKED_FRAME_GAPS)
                         sum->missing_frames[sum->missing_frames_len++] = m;
                 }
             }
             else if (frame == last_frame)
             {
-                sum->repeated++;
-                if (sum->repeate_frames_len < MAX_TRACKED_FRAME_GAPS)
-                    sum->repeate_frames[sum->repeate_frames_len++] = frame;
+                sum->repeated_frame_count++;
+                if (sum->repeat_frames_len < MAX_TRACKED_FRAME_GAPS)
+                    sum->repeat_frames[sum->repeat_frames_len++] = frame;
             }
             else 
             {
                 // now frame must be < last frame (i.e., out of order)
-                sum->repeated++;
-                if (sum->repeate_frames_len < MAX_TRACKED_FRAME_GAPS)
-                    sum->repeate_frames[sum->repeate_frames_len++] = frame;
+                sum->repeated_frame_count++;
+                if (sum->repeat_frames_len < MAX_TRACKED_FRAME_GAPS)
+                    sum->repeat_frames[sum->repeat_frames_len++] = frame;
             }
 
         }
@@ -342,11 +293,11 @@ int summarize(ByteArray* bytes, Summary* sum)
         {
             if (have_time) frame_duration = last_time - first_time;
         }
-        sum->count++;
+        sum->captured_frame_count++;
     }
 
     /* Derive duration and sampling rate from timestamps if available. */
-    if (have_time && sum->count > 1)
+    if (have_time && sum->captured_frame_count > 1)
     {
         f64 dt = last_time - first_time;
         if (dt > 0.0)
@@ -356,7 +307,7 @@ int summarize(ByteArray* bytes, Summary* sum)
             /* If the packet itself did not provide a framerate, estimate it. */
             if (sum->rate == 0.0f)
             {
-                sum->rate = (f32)((f64)(sum->count - 1) / dt);
+                sum->rate = (f32)((f64)(sum->captured_frame_count - 1) / dt);
             }
         }
     }
@@ -368,15 +319,15 @@ int summarize(ByteArray* bytes, Summary* sum)
 
     struct tm* tm_info;
     tm_info = localtime(&ts.tv_sec);
-    strftime(sum->start_time, sizeof(sum->start_time), "%d-%m-%Y %H:%M:%S", tm_info);
-    snprintf(sum->start_time, sizeof(sum->start_time), "%s.%09ld", sum->start_time, ts.tv_nsec);
-
+    char date_buf[20];
+    strftime(date_buf, sizeof(date_buf), "%d-%m-%Y %H:%M:%S", tm_info);
+    snprintf(sum->start_time, sizeof(sum->start_time), "%s.%09ld", date_buf, ts.tv_nsec);
 
     return 1;
 }
 
 
-void print_summary(FILE* f, Summary* sum)
+void print_summary(FILE* f, const Summary* sum)
 {
     if (!sum) return;
 
@@ -400,30 +351,32 @@ void print_summary(FILE* f, Summary* sum)
     fprintf(f, " -- T-Channels      %39u\n", sum->temperature_channel_count);
     fprintf(f, " -- P-Channels      %39u\n", sum->pressure_channel_count);
     fprintf(f, "-----------------------------------------------------------\n");
-    fprintf(f, " -- Total Frames    %39llu\n", sum->count);
-    fprintf(f, " -- Missing Frames  %39llu\n", sum->missing);
-    fprintf(f, " -- Repeated Frames %39llu\n", sum->repeated);
+    fprintf(f, " -- Total Frames    %39llu\n", sum->captured_frame_count);
+    fprintf(f, " -- Missing Frames  %39llu\n", sum->missing_frame_count);
+    fprintf(f, " -- Repeated Frames %39llu\n", sum->repeated_frame_count);
     fprintf(f, "-----------------------------------------------------------\n");
 
-    if (sum->missing)
+    if (sum->missing_frame_count)
     {
-        fprintf(f, " -- Missing Frames -- \n");
+        fprintf(f, " -- Missing Frames -- %s\n", sum->missing_frame_count > sum->missing_frames_len ? "(truncated)" : "");
         for (u32 i = 0; i < sum->missing_frames_len; ++i)
         {
             fprintf(f, "%5u ", sum->missing_frames[i]);
             if ((i+1) % 10 == 0) fprintf(f, "\n");
         }
-        fprintf(f, "\n");
+        fprintf(f, "%s\n", sum->missing_frame_count > sum->missing_frames_len ? " ... " : "");
+        fprintf(f, "-----------------------------------------------------------\n");
     }
-    if (sum->repeated)
+    if (sum->repeated_frame_count)
     {
-        fprintf(f, " -- Repeated Frames -- \n");
-        for (u32 i = 0; i < sum->repeate_frames_len; ++i)
+        fprintf(f, " -- Repeated Frames -- %s\n", sum->repeated_frame_count > sum->repeat_frames_len ? "(truncated)" : "");
+        for (u32 i = 0; i < sum->repeat_frames_len; ++i)
         {
-            fprintf(f, "%5u ", sum->repeate_frames[i]);
+            fprintf(f, "%5u ", sum->repeat_frames[i]);
             if ((i+1) % 10 == 0) fprintf(f, "\n");
         }
-        fprintf(f, "\n");
+        fprintf(f, "%s\n", sum->repeated_frame_count > sum->repeat_frames_len ? " ... " : "");
+        fprintf(f, "-----------------------------------------------------------\n");
     }
 
 }
