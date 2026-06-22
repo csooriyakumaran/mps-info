@@ -23,14 +23,15 @@ include(FetchContent)
 FetchContent_Declare(
     scanivalve-mps-protocol
     GIT_REPOSITORY https://github.com/csooriyakumaran/scanivalve-mps-protocol.git
-    GIT_TAG v0.1.4
+    GIT_TAG        v0.1.4
+    GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(scanivalve-mps-protocol)
 
 FetchContent_Declare(
     aether
     GIT_REPOSITORY https://github.com/csooriyakumaran/aether.git
-    GIT_TAG        v0.0.1
+    GIT_TAG        v0.0.4
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(aether)
