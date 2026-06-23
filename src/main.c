@@ -1,6 +1,6 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <time.h>
 
 #include "version.h"
@@ -10,6 +10,7 @@
 
 #define AETHER_IMPLEMENTATION
 #include "aether/aether.h"
+#include "aether/aether-version.h"
 
 #define MAX_TRACKED_FRAME_GAPS 256
 
@@ -30,6 +31,7 @@ typedef struct {
 
     f32  duration;
     f32  rate;
+    f32* pressure_avg;
 
     u32* missing_frames;
     u32  missing_frames_len;
@@ -38,13 +40,15 @@ typedef struct {
     char start_time[32];
 } Summary;
 
-int evaluate_packets(str8 bytes, Summary* sum, Arena* arena);
+int evaluate_packets(bytes_view data, Summary* sum, Arena* arena);
 void print_summary(FILE* f, const Summary* sum);
+void print_pressure_chart(FILE* f, const Summary* sum);
 
 int main(int argc, char** argv)
 {
     const char* fname = NULL;
     b8 mapfile        = false;
+    b8 graph          = false;
 
     if (argc < 2)
     {
@@ -62,6 +66,8 @@ int main(int argc, char** argv)
             return 0;
         } else if (strcmp(argv[i], "--map-file") == 0) {
             mapfile = true;
+        } else if (strcmp(argv[i], "--graph") == 0) {
+            graph = true;
         } else if (!fname) {
             fname = argv[i];
         }
@@ -71,15 +77,11 @@ int main(int argc, char** argv)
     Summary summary = {0};
     summary.filepath = arena_push_cstring(&arena, fname);
 
-    str8 bytes = {0};
     u64 start = time_mark();
 
-    if (mapfile)
-        bytes = map_file(summary.filepath);
-    else
-        bytes = arena_read_file(&arena, summary.filepath);
+    bytes_view data = mapfile ? map_file(summary.filepath) : view_from_bytes(arena_read_file(&arena, summary.filepath));
 
-    if (!bytes.data || bytes.size == 0)
+    if (!data.data || data.size == 0)
     {
         fprintf(stderr, "Error: No data read or mapped from %s", summary.filepath);
         arena_release(&arena);
@@ -89,7 +91,7 @@ int main(int argc, char** argv)
     u64 file_read_end = time_mark();
 
     //- determine the packet type (assume constant for whole file)
-    u8 packet_type = bytes.data[0];
+    u8 packet_type = data.data[0];
     const MpsBinaryPacketInfo* info = mps_get_binary_packet_info_by_type(packet_type);
     if (!info)
     {
@@ -98,7 +100,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    if (!evaluate_packets(bytes, &summary, &arena))
+    if (!evaluate_packets(data, &summary, &arena))
     {
         fprintf(stderr, "Failed to summarize file contents.\n");
         arena_release(&arena);
@@ -115,18 +117,19 @@ int main(int argc, char** argv)
     fprintf(stdout, " -- Data Processed  %36.2f ms\n", processing_time);
     fprintf(stdout, "-----------------------------------------------------------\n");
     fprintf(stdout, " -- Total Time      %36.2f ms\n", elapsed_time);
+    if (graph) print_pressure_chart(stdout, &summary);
 
-    if (mapfile) unmap_file(bytes);
+    if (mapfile) unmap_file(data);
     arena_release(&arena);
     return 0;
 }
 
-int evaluate_packets(str8 bytes, Summary* sum, Arena* arena)
+int evaluate_packets(bytes_view data, Summary* sum, Arena* arena)
 {
-    if (!sum || !bytes.data)
+    if (!sum || !data.data)
         return 0;
 
-    if (bytes.size < sizeof(i32))
+    if (data.size < sizeof(i32))
     {
         fprintf(stderr, "File too small to contain packet header\n");
         return 0;
@@ -137,7 +140,7 @@ int evaluate_packets(str8 bytes, Summary* sum, Arena* arena)
      * from mps-protocol.h. The first 4 bytes are an int32_t type field, and
      * the low byte holds the packet type ID (e.g. 0x0A, 0x5D, 0x5B, ...).
      */
-    u8 type_id = bytes.data[0];
+    u8 type_id = data.data[0];
 
     const MpsBinaryPacketInfo* info = mps_get_binary_packet_info_by_type(type_id);
     if (!info)
@@ -146,14 +149,14 @@ int evaluate_packets(str8 bytes, Summary* sum, Arena* arena)
         return 0;
     }
 
-    if (bytes.size % info->size_bytes != 0)
-        fprintf(stderr, "Warning: file size (%llu) is not a multiple of packet size (%u)\n", bytes.size, info->size_bytes);
+    if (data.size % info->size_bytes != 0)
+        fprintf(stderr, "Warning: file size (%llu) is not a multiple of packet size (%u)\n", data.size, info->size_bytes);
 
-    u64 packet_count = bytes.size / info->size_bytes;
+    u64 packet_count = data.size / info->size_bytes;
 
     if (packet_count == 0) return 1; /* nothing to do, but summary is valid */
 
-    sum->file_size            = bytes.size;
+    sum->file_size            = data.size;
     sum->packet_type          = type_id;
     sum->packet_size          = info->size_bytes;
     sum->captured_frame_count = 0;
@@ -168,6 +171,7 @@ int evaluate_packets(str8 bytes, Summary* sum, Arena* arena)
     sum->start_time[0]  = '\0';
     sum->missing_frames = arena_push_array(arena, u32, MAX_TRACKED_FRAME_GAPS);
     sum->repeat_frames  = arena_push_array(arena, u32, MAX_TRACKED_FRAME_GAPS);
+    sum->pressure_avg   = arena_push_array(arena, f32, info->pressure_channel_count);
 
     u32 frame          = 0;
     u32 first_frame    = 0;
@@ -179,10 +183,12 @@ int evaluate_packets(str8 bytes, Summary* sum, Arena* arena)
     int have_time      = 0;
     f64 frame_duration = 0.0;
     f64 frame_time     = 0.0;
+    f64* pressure_sum  = arena_push_array_zero(arena, f64, info->pressure_channel_count);
+
 
     for (u64 i = 0; i < packet_count; ++i)
     {
-        const u8* base = bytes.data + i * info->size_bytes;
+        const u8* base = data.data + i * info->size_bytes;
 
         switch (info->type)
         {
@@ -193,6 +199,9 @@ int evaluate_packets(str8 bytes, Summary* sum, Arena* arena)
 
                 frame      = (u32)pkt->frame;
                 frame_time = (f64)pkt->frame_time_s + (f64)pkt->frame_time_ns * 1e-9;
+
+                for (u32 ch = 0; ch < info->pressure_channel_count; ++ch)
+                    pressure_sum[ch] += (f64)pkt->pressure[ch];
 
                 if (i == 0)
                 {
@@ -312,6 +321,9 @@ int evaluate_packets(str8 bytes, Summary* sum, Arena* arena)
         }
     }
 
+    for (u32 ch = 0; ch < sum->pressure_channel_count; ++ch)
+        sum->pressure_avg[ch] = (f32)(pressure_sum[ch] / (f64)sum->captured_frame_count);
+
     // - generate start scan time string
     struct timespec ts;
     ts.tv_sec = start_time_s;
@@ -379,4 +391,34 @@ void print_summary(FILE* f, const Summary* sum)
         fprintf(f, "-----------------------------------------------------------\n");
     }
 
+}
+
+void print_pressure_chart(FILE* f, const Summary* sum)
+{
+    const int width  = 53;
+    const int center = width / 2;
+
+    f32 m = 0.0f;
+    for (u32 ch = 0; ch < sum->pressure_channel_count; ++ch)
+    {
+        f32 v = fabsf(sum->pressure_avg[ch]);
+        if (v > m) m = v;
+    }
+
+    for (u32 ch = 0; ch < sum->pressure_channel_count; ++ch)
+    {
+        f32 v     = sum->pressure_avg[ch];
+        f32 ratio = (m > 0.0f) ? (v / m) : 0.0f;          /* -1 .. 1 */
+        int len   = (int)(fabsf(ratio) * center + 0.5f);  /* cells from center */
+
+        fprintf(f, "P%-2u [", ch + 1);
+        for (int i = 0; i < width; ++i)
+        {
+            b8 filled = (i == center) ||
+                    (ratio >= 0 && i > center && i <= center + len) ||
+                    (ratio <  0 && i < center && i >= center - len);
+            fputc(filled ? '|' : '.', f);
+        }
+        fprintf(f, "]\n");
+    }
 }
