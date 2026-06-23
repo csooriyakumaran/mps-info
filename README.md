@@ -19,6 +19,7 @@ mps-info.exe <path/to/datafile> [OPTIONS]
 | OPTION | DESCRIPTION |
 | ------ | ------------| 
 | `--map-file` | Leverages direct mem-mapping of the data file avoiding the copy into memory. This can improve performance for very large files |
+| `--graph` | prints an ASCII graph of the average pressure on each channel |
 
 ***OUTPUT***
 
