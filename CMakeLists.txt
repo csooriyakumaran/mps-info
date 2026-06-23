@@ -31,7 +31,7 @@ FetchContent_MakeAvailable(scanivalve-mps-protocol)
 FetchContent_Declare(
     aether
     GIT_REPOSITORY https://github.com/csooriyakumaran/aether.git
-    GIT_TAG        v0.0.4
+    GIT_TAG        v0.0.5
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(aether)
